@@ -1,113 +1,108 @@
 # Automated Production Planning System
 
-An intelligent production scheduling system that optimizes manufacturing plans based on demand forecasts and capacity constraints, minimizing both backlog and excess inventory.
+Builds a daily production release plan from a demand forecast and a shared daily capacity. It minimizes backlog first and unnecessary inventory second, and it builds ahead only as far as it has to. The plan comes from an exact mixed-integer optimization model, not a heuristic, and it is implemented in both **MATLAB** and **Python**.
 
-## Project Overview
+![Dashboard](results/plan_primer_ulaz.png)
 
-This system automates weekly production planning by:
-- Analyzing demand forecasts and daily production capacities
-- Generating optimal production release schedules
-- Minimizing backlog while avoiding excess inventory buildup
-- Providing visual analytics for production performance monitoring
+## Example
 
-## Key Features
+`data/primer_ulaz.xlsx` is a synthetic input: 15 part numbers over 6 weeks, with capacity of 450/day on weekdays, 300 on Saturday and 0 on Sunday. The first week has a demand peak of 3,650 units against 2,550 of capacity.
 
-- **Dynamic Input**: Excel-based demand and capacity configuration
-- **Intelligent Scheduling**: Automated production release planning
-- **Backlog Management**: Real-time tracking and minimization
-- **Inventory Optimization**: Balance between stockouts and excess stock
-- **Visual Analytics**: Comprehensive dashboards for production insights
-- **Scalable Planning**: Support for multi-week rolling forecasts
+The planner:
+- runs at full capacity from day 1 and builds ahead on days 1 and 2, before the peak hits;
+- still cannot avoid backlog (up to 1,100 units at the end of week 1), and works it off by Monday of week 3;
+- from week 3 on, produces close to demand and holds only the safety stock (20 per PN).
 
-## Dashboard Analytics
+The complete plan is in [`results/plan_primer_ulaz.xlsx`](results/plan_primer_ulaz.xlsx).
 
-The system generates comprehensive visualizations including:
+## Model
 
-1. **Weekly Capacity vs Production** - Resource utilization tracking
-2. **Backlog Analysis** - Weekly backlog trends and hotspots
-3. **Inventory Levels** - Stock accumulation by week
-4. **Daily Capacity Utilization** - Efficiency metrics over time
-5. **Top 5 Production Items** - Forward and backward production analysis
-6. **Demand vs Production Tracking** - Per-product performance (top 3 items)
-7. **Inventory Movement** - Stock trend analysis (top 3 items)
+For every part number *p* and day *d*:
 
-## Technical Stack
+| Variable | Meaning | Cost / unit / day |
+|---|---|---:|
+| x | release (production), integer | 0 |
+| S | stock up to the safety-stock target | 0.1 |
+| E | stock above the safety-stock target | 5 |
+| B | backlog (demand not yet delivered) | 100 |
+| U | shortfall below the safety-stock target | 1 |
 
-- **MATLAB R2020+** - Core optimization and analytics engine
-- **Excel** - Input/output data interface
-- **Optimization Algorithms** - Custom scheduling heuristics
+Constraints:
 
-## Project Structure
+- **Inventory balance**: (S + E − B)<sub>d</sub> = (S + E − B)<sub>d−1</sub> + x<sub>d</sub> − demand<sub>d</sub>
+- **Soft safety stock**: S + U ≥ target, with 0 ≤ S ≤ target
+- **Shared capacity**: Σ<sub>p</sub> x<sub>p,d</sub> ≤ capacity<sub>d</sub>
+
+All costs are parameters. Because backlog costs 20 times as much as excess stock, building up to about 20 days ahead is still cheaper than being late. Lower `backlog_penalty` if you prefer to ship late rather than build early.
+
+## Input format
+
+The first sheet of the workbook, with data starting in column C:
 
 ```
-Production-Planning-System/
-├── dugorocni_plan.m                    # Main planning algorithm
-├── input_data.xlsx                     # Demand & capacity input
-├── poboljsani_plan_YYYY-MM-DD.xlsx    # Generated production schedule
-└── poboljsani_plan_grafika.png        # Analytics dashboard
+        A                 B   C          D          ...
+ 1                            Kapacitet  Kapacitet
+ 2                            450        450          <- daily capacity
+ 8                            CW01                    (optional)
+ 9                            Pon        Uto          <- one column per day
+11  PN-0001
+12  Planned release                                   <- filled in by the planner
+13  Planed order              0          37           <- demand
+14  Cummulative                                       <- filled in: stock − backlog
+15  PN-0002
+...
 ```
+
+## Output
+
+`results/plan_<input>.xlsx` contains these sheets:
+- **Plan**: the input sheet with *Planned release* and *Cummulative* filled in.
+- **Dnevni pregled**: per day, capacity, demand, production, utilization, stock, backlog and status.
+- **Nedeljni pregled**: the same totals per week.
+- **Backlog**: backlog per PN per day.
+- **Proizvodnja unapred**: per PN, how many units were made on the due day, 1, 2 or 3+ days early, or late (FIFO matching).
+
+`results/plan_<input>.png` is the dashboard.
 
 ## Usage
 
-### Step 1: Prepare Input Data
-Create or update `input_data.xlsx` with:
-- **Demand Sheet**: Weekly demand forecasts per product (PN)
-- **Capacity Sheet**: Daily production capacity per product
+### Python
 
-The system supports rolling forecasts - you can extend planning horizon by adding more weeks.
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 
-### Step 2: Run Planning Algorithm
-```matlab
-% In MATLAB
-run dugorocni_plan.m
+python -m planner                              # data/primer_ulaz.xlsx
+python -m planner moj_plan.xlsx --safety-stock 0 --backlog-penalty 200
+pytest                                         # tests
 ```
 
-### Step 3: Review Results
+### MATLAB
 
-The system generates:
-- `poboljsani_plan_YYYY-MM-DD_HHMM.xlsx` - Detailed production schedule with:
-  - Planned Release dates
-  - Production quantities
-  - Backlog status
-  - Forward production flags
-  
-- `poboljsani_plan_grafika.png` - Visual analytics dashboard
+```matlab
+run('matlab/dugorocni_plan.m')
+```
 
-## Algorithm Logic
+You need R2019a or newer and the Optimization Toolbox (`intlinprog`). Set the input file and the costs in the `config` block at the top of the script.
 
-1. **Data Import**: Load demand forecasts and capacity constraints
-2. **Schedule Optimization**:
-   - Prioritize backlog reduction
-   - Avoid unnecessary forward production (minimize WIP)
-   - Respect daily capacity limits
-   - Balance across multiple product numbers (PNs)
-3. **Release Planning**: Calculate optimal production start dates
-4. **Performance Analysis**: Generate metrics and visualizations
-5. **Export**: Save detailed schedules and executive dashboards
+### New sample data
 
-## Business Benefits
+```bash
+python scripts/make_sample_input.py --pns 20 --weeks 8 --seed 1
+```
 
-- **Reduced Backlog**: Intelligent prioritization minimizes delays
-- **Lower Inventory Costs**: Avoid overproduction and excess WIP
-- **Capacity Optimization**: Maximum utilization without overload
-- **Proactive Planning**: Visual early warnings for bottlenecks
-- **Data-Driven Decisions**: Clear metrics for production management
+## Project structure
 
-## Applications
-
-- Manufacturing production planning
-- Supply chain operations
-- Capacity planning and management
-- Demand-driven scheduling
-- Lean manufacturing optimization
-
-## Key Learnings
-
-- Production planning optimization techniques
-- Capacity-constrained scheduling
-- Backlog vs. inventory trade-off management
-- Data visualization for operations management
-- MATLAB data processing and analytics
+```
+data/primer_ulaz.xlsx          synthetic sample input
+planner/                       Python: io.py, model.py, analysis.py, plot.py, __main__.py
+matlab/dugorocni_plan.m        MATLAB entry script (config + run)
+matlab/*.m                     parse_plan_input, solve_plan, fifo_lead_buckets, write_plan_report, plot_plan
+scripts/make_sample_input.py   sample data generator
+tests/                         pytest tests
+results/                       generated plan and dashboard
+```
 
 ## Author
 
@@ -119,7 +114,3 @@ The system generates:
 ## License
 
 This project is available for educational and research purposes.
-
----
-
-**Note**: This system was developed to solve real-world production planning challenges, demonstrating practical applications of operations research and optimization theory.
